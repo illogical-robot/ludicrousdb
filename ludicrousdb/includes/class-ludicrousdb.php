@@ -463,6 +463,11 @@ class LudicrousDB extends wpdb {
 	 */
 	public function db_connect( $query = '' ) {
 
+		// PHP 8.1+ compat, see: https://core.trac.wordpress.org/changeset/51582
+		if ( $this->use_mysqli ) {
+			mysqli_report( MYSQLI_REPORT_OFF );
+		}
+
 		// Bail if empty query
 		if ( empty( $query ) ) {
 			return false;
