@@ -1285,7 +1285,8 @@ class LudicrousDB extends wpdb {
 	 *
 	 * @param string $query Query.
 	 *
-	 * @return int number of rows
+	 * @return int|bool Boolean true for CREATE, ALTER, TRUNCATE and DROP queries. Number of rows
+	 *                  affected/selected for all other queries. Boolean false on error.
 	 */
 	public function query( $query ) {
 
