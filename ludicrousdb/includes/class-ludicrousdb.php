@@ -817,6 +817,11 @@ class LudicrousDB extends wpdb {
 				}
 
 				$msg  = date( 'Y-m-d H:i:s' ) . " Can't select {$dbhname} - \n"; // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date
+
+				// If we run for example from CLI the host can empty, let's avoid php errors
+				if (!isset($_SERVER['HTTP_HOST'])) {
+					$_SERVER['HTTP_HOST'] = '';
+				}
 				$msg .= "'referrer' => '{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}',\n";
 				$msg .= "'host' => {$host},\n";
 
@@ -1101,6 +1106,10 @@ class LudicrousDB extends wpdb {
 	 */
 	public function _real_escape( $string ) { // phpcs:ignore PSR2.Methods.MethodDeclaration.Underscore
 
+		// Override if not a string
+		if ( ! is_string( $string ) ) {
+			$string = '';
+		}
 		// Slash the query part
 		$escaped = addslashes( $string );
 
