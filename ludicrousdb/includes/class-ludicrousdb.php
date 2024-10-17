@@ -818,7 +818,7 @@ class LudicrousDB extends wpdb {
 
 				$msg  = date( 'Y-m-d H:i:s' ) . " Can't select {$dbhname} - \n"; // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date
 
-				// If we run for example from CLI the host can empty, let's avoid php errors
+				// If we run, for example, from CLI, the host can empty, so let's avoid PHP errors
 				if (!isset($_SERVER['HTTP_HOST'])) {
 					$_SERVER['HTTP_HOST'] = '';
 				}
@@ -1107,7 +1107,7 @@ class LudicrousDB extends wpdb {
 	public function _real_escape( $string ) { // phpcs:ignore PSR2.Methods.MethodDeclaration.Underscore
 
 		// https://github.com/stuttter/ludicrousdb/commit/80a144a8d8787a86cd95b46a2b9b48fdba76d76f#diff-43900a3db58a940176b8af669e24e8fd44cddc13058aad63157556d2c976f333R1119
-		// Override if not a scalar - we cannot use is_string because it will break for example true/false values etc
+		// Override if not a scalar (we cannot use is_string() because it will break, for example, true/false values, etc.)
 		if ( ! is_scalar( $string ) ) {
 			$string = '';
 		}
