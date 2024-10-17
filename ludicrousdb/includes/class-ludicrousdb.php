@@ -1106,8 +1106,9 @@ class LudicrousDB extends wpdb {
 	 */
 	public function _real_escape( $string ) { // phpcs:ignore PSR2.Methods.MethodDeclaration.Underscore
 
-		// Override if not a string
-		if ( ! is_string( $string ) ) {
+		// https://github.com/stuttter/ludicrousdb/commit/80a144a8d8787a86cd95b46a2b9b48fdba76d76f#diff-43900a3db58a940176b8af669e24e8fd44cddc13058aad63157556d2c976f333R1119
+		// Override if not a scalar - we cannot use is_string because it will break for example true/false values etc
+		if ( ! is_scalar( $string ) ) {
 			$string = '';
 		}
 		// Slash the query part
