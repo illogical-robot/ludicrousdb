@@ -1206,11 +1206,11 @@ class LudicrousDB extends wpdb {
 
 		if ( $this->dbh_type_check( $dbh ) ) {
 			if ( true === $this->use_mysqli ) {
-				if ( mysqli_ping( $dbh ) ) {
+				if ( mysqli_query( $dbh, 'DO 1' ) !== false ) {
 					return true;
 				}
 			} else {
-				if ( mysql_ping( $dbh ) ) {
+				if ( mysql_query( 'DO 1', $dbh ) !== false ) {
 					return true;
 				}
 			}
