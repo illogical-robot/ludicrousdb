@@ -752,7 +752,7 @@ class LudicrousDB extends wpdb {
 
 				// Connect if necessary or possible
 				if ( ! empty( $use_master ) || empty( $tries_remaining ) || ( true === $tcp ) || ! isset( $this->last_connection ) ) {
-					$this->single_db_connect( $dbhname, $host_and_port, $user, $password );
+					$this->single_db_connect( $dbhname, $host_and_port, $user, $password, $timeout );
 				} else {
 					$this->dbhs[ $dbhname ] = false;
 				}
@@ -892,14 +892,16 @@ class LudicrousDB extends wpdb {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @param string $dbhname Database name.
-	 * @param string $host Internet address: host:port of server on internet.
-	 * @param string $user Database user.
-	 * @param string $password Database password.
+	 * @param string     $dbhname  Database name.
+	 * @param string     $host     Internet address: host:port of server on internet.
+	 * @param string     $user     Database user.
+	 * @param string     $password Database password.
+	 * @param float|null $timeout  Per-DB connect timeout in seconds (from ludicrous_servers config).
+	 *                             When null, mysqli falls back to mysqli.connect_timeout (php.ini).
 	 *
 	 * @return bool|mysqli|resource
 	 */
-	protected function single_db_connect( $dbhname, $host, $user, $password ) {
+	protected function single_db_connect( $dbhname, $host, $user, $password, $timeout = null ) {
 		$this->is_mysql = true;
 
 		/*
@@ -911,6 +913,14 @@ class LudicrousDB extends wpdb {
 
 		if ( true === $this->use_mysqli ) {
 			$this->dbhs[ $dbhname ] = mysqli_init();
+
+			// Apply per-DB connect timeout. Without this, a dead host falls back to the
+			// OS TCP SYN retry timeout (~21s on Linux). mysqli requires an int, so floor
+			// sub-second values to 1.
+			if ( null !== $timeout ) {
+				$connect_timeout = max( 1, (int) ceil( (float) $timeout ) );
+				mysqli_options( $this->dbhs[ $dbhname ], MYSQLI_OPT_CONNECT_TIMEOUT, $connect_timeout );
+			}
 
 			// mysqli_real_connect doesn't support the host param including a port or socket
 			// like mysql_connect does. This duplicates how mysql_connect detects a port and/or socket file.
