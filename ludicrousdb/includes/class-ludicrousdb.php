@@ -899,7 +899,8 @@ class LudicrousDB extends wpdb {
 	 * @param string     $user     Database user.
 	 * @param string     $password Database password.
 	 * @param float|null $timeout  Per-DB connect timeout in seconds (from ludicrous_servers config).
-	 *                             When null, mysqli falls back to mysqli.connect_timeout (php.ini).
+	 *                             When null, no MYSQLI_OPT_CONNECT_TIMEOUT is set and the connect
+	 *                             falls back to the OS TCP SYN-retry timeout (~60s on Linux).
 	 *
 	 * @return bool|mysqli|resource
 	 */
