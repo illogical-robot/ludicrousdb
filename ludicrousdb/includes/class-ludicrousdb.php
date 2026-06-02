@@ -745,14 +745,16 @@ class LudicrousDB extends wpdb {
 
 				$this->timer_start();
 
-				// Maybe check TCP responsiveness
+				// Maybe check TCP responsiveness. Pass user/password so the probe
+				// authenticates and disconnects cleanly (MariaDB 10.4+ otherwise logs
+				// "(closed normally without authentication)" on every probe).
 				$tcp = ! empty( $this->check_tcp_responsiveness )
-					? $this->check_tcp_responsiveness( $host, $port, $timeout )
+					? $this->check_tcp_responsiveness( $host, $port, $timeout, $user, $password )
 					: null;
 
 				// Connect if necessary or possible
 				if ( ! empty( $use_master ) || empty( $tries_remaining ) || ( true === $tcp ) || ! isset( $this->last_connection ) ) {
-					$this->single_db_connect( $dbhname, $host_and_port, $user, $password );
+					$this->single_db_connect( $dbhname, $host_and_port, $user, $password, $timeout );
 				} else {
 					$this->dbhs[ $dbhname ] = false;
 				}
@@ -892,14 +894,17 @@ class LudicrousDB extends wpdb {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @param string $dbhname Database name.
-	 * @param string $host Internet address: host:port of server on internet.
-	 * @param string $user Database user.
-	 * @param string $password Database password.
+	 * @param string     $dbhname  Database name.
+	 * @param string     $host     Internet address: host:port of server on internet.
+	 * @param string     $user     Database user.
+	 * @param string     $password Database password.
+	 * @param float|null $timeout  Per-DB connect timeout in seconds (from ludicrous_servers config).
+	 *                             When null, no MYSQLI_OPT_CONNECT_TIMEOUT is set and the connect
+	 *                             falls back to the OS TCP SYN-retry timeout (~60s on Linux).
 	 *
 	 * @return bool|mysqli|resource
 	 */
-	protected function single_db_connect( $dbhname, $host, $user, $password ) {
+	protected function single_db_connect( $dbhname, $host, $user, $password, $timeout = null ) {
 		$this->is_mysql = true;
 
 		/*
@@ -911,6 +916,14 @@ class LudicrousDB extends wpdb {
 
 		if ( true === $this->use_mysqli ) {
 			$this->dbhs[ $dbhname ] = mysqli_init();
+
+			// Apply per-DB connect timeout. Without this, a dead host falls back to the
+			// OS TCP SYN retry timeout (~21s on Linux). mysqli requires an int, so floor
+			// sub-second values to 1.
+			if ( null !== $timeout ) {
+				$connect_timeout = max( 1, (int) ceil( (float) $timeout ) );
+				mysqli_options( $this->dbhs[ $dbhname ], MYSQLI_OPT_CONNECT_TIMEOUT, $connect_timeout );
+			}
 
 			// mysqli_real_connect doesn't support the host param including a port or socket
 			// like mysql_connect does. This duplicates how mysql_connect detects a port and/or socket file.
@@ -1844,7 +1857,7 @@ class LudicrousDB extends wpdb {
 	 * @param float  $float_timeout Timeout as float number.
 	 * @return bool true when $host:$post responds within $float_timeout seconds, else false
 	 */
-	public function check_tcp_responsiveness( $host, $port, $float_timeout ) {
+	public function check_tcp_responsiveness( $host, $port, $float_timeout, $user = null, $password = null ) {
 
 		// Get the cache key
 		$cache_key = $this->tcp_get_cache_key( $host, $port );
@@ -1863,7 +1876,44 @@ class LudicrousDB extends wpdb {
 			return false;
 		}
 
-		// Defaults
+		// When credentials are supplied, use a full mysqli auth round-trip so the
+		// disconnect is post-authentication. The bare fsockopen+fclose probe trips
+		// MariaDB 10.4+'s "(closed normally without authentication)" warning on
+		// every cache miss (MDEV-19282) and bumps Aborted_connects_preauth, which
+		// counts toward max_connect_errors and can block the probing host
+		// (MDEV-21456). Adds ~0.1ms per probe; amortized by the 10s cache.
+		if ( ( null !== $user ) && ( null !== $password ) && function_exists( 'mysqli_init' ) ) {
+			$mysqli = mysqli_init();
+			if ( false !== $mysqli ) {
+				$connect_timeout = max( 1, (int) ceil( (float) $float_timeout ) );
+				@mysqli_options( $mysqli, MYSQLI_OPT_CONNECT_TIMEOUT, $connect_timeout );
+				$errno  = 0;
+				$errstr = '';
+				try {
+					$ok = @mysqli_real_connect( $mysqli, $host, $user, $password, null, (int) $port );
+				} catch ( \Throwable $e ) {
+					$ok     = false;
+					$errno  = $e->getCode();
+					$errstr = $e->getMessage();
+				}
+				if ( $ok ) {
+					mysqli_close( $mysqli );
+					$this->tcp_cache_set( $cache_key, 'up' );
+
+					return true;
+				}
+				if ( 0 === $errno ) {
+					$errno  = mysqli_connect_errno();
+					$errstr = (string) mysqli_connect_error();
+				}
+				$this->tcp_cache_set( $cache_key, 'down' );
+
+				return "[ > {$float_timeout} ] ({$errno}) '{$errstr}'";
+			}
+		}
+
+		// Fallback for callers that don't pass credentials: fsockopen probe.
+		// Note: triggers MariaDB pre-auth abort warnings on every cache miss.
 		$errno  = 0;
 		$errstr = '';
 
