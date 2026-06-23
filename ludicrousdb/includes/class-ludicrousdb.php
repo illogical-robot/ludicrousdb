@@ -158,6 +158,13 @@ class LudicrousDB extends wpdb {
 	public $db_connections = array();
 
 	/**
+	 * The last mysqli connect error for each dbhname
+	 *
+	 * @var array
+	 */
+	protected $last_connect_error = array();
+
+	/**
 	 * The list of unclosed connections sorted by LRU
 	 *
 	 * @var array
@@ -730,6 +737,7 @@ class LudicrousDB extends wpdb {
 				$this->lag_threshold = isset( $lag_threshold )
 					? $lag_threshold
 					: $this->default_lag_threshold;
+				unset( $this->last_connect_error[ $dbhname ] );
 
 				// Check for a lagged slave, if applicable
 				if ( empty( $use_master ) && empty( $write ) && empty ( $this->ignore_slave_lag ) && isset( $this->lag_threshold ) && ! isset( $server['host'] ) && ( $lagged_status = $this->get_lag_cache() ) === DB_LAG_BEHIND ) {
@@ -752,8 +760,9 @@ class LudicrousDB extends wpdb {
 					? $this->check_tcp_responsiveness( $host, $port, $timeout, $user, $password )
 					: null;
 
-				// Connect if necessary or possible
-				if ( ! empty( $use_master ) || empty( $tries_remaining ) || ( true === $tcp ) || ! isset( $this->last_connection ) ) {
+				// Connect if necessary or possible. Do not force a first connection
+				// after TCP already reported the host down.
+				if ( ! empty( $use_master ) || empty( $tries_remaining ) || ( true === $tcp ) || ( null === $tcp ) ) {
 					$this->single_db_connect( $dbhname, $host_and_port, $user, $password, $timeout );
 				} else {
 					$this->dbhs[ $dbhname ] = false;
@@ -816,6 +825,9 @@ class LudicrousDB extends wpdb {
 						$error = mysql_error( $this->dbhs[ $dbhname ] );
 						$errno = mysql_errno( $this->dbhs[ $dbhname ] );
 					}
+				} elseif ( isset( $this->last_connect_error[ $dbhname ] ) ) {
+					$error = $this->last_connect_error[ $dbhname ]['error'];
+					$errno = $this->last_connect_error[ $dbhname ]['errno'];
 				}
 
 				$msg  = date( 'Y-m-d H:i:s' ) . " Can't select {$dbhname} - \n"; // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date
@@ -956,9 +968,22 @@ class LudicrousDB extends wpdb {
 				$pre_host = 'p:';
 			}
 
-			mysqli_real_connect( $this->dbhs[ $dbhname ], $pre_host . $host, $user, $password, null, $port, $socket, $client_flags );
+			$connected = @mysqli_real_connect( // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				$this->dbhs[ $dbhname ],
+				$pre_host . $host,
+				$user,
+				$password,
+				null,
+				$port,
+				$socket,
+				$client_flags
+			);
 
-			if ( $this->dbhs[ $dbhname ]->connect_errno ) {
+			if ( ( false === $connected ) || $this->dbhs[ $dbhname ]->connect_errno ) {
+				$this->last_connect_error[ $dbhname ] = array(
+					'error' => $this->dbhs[ $dbhname ]->connect_error,
+					'errno' => $this->dbhs[ $dbhname ]->connect_errno,
+				);
 				$this->dbhs[ $dbhname ] = false;
 
 				return false;
