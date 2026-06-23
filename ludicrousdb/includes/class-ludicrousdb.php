@@ -816,6 +816,8 @@ class LudicrousDB extends wpdb {
 				$success                = false;
 				$this->last_connection  = compact( 'dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success' );
 				$this->db_connections[] = $this->last_connection;
+				$error                  = '';
+				$errno                  = 0;
 
 				if ( $this->dbh_type_check( $this->dbhs[ $dbhname ] ) ) {
 					if ( true === $this->use_mysqli ) {
