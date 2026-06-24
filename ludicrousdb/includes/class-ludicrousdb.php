@@ -760,9 +760,9 @@ class LudicrousDB extends wpdb {
 					? $this->check_tcp_responsiveness( $host, $port, $timeout, $user, $password )
 					: null;
 
-				// Connect if necessary or possible. Do not force a first connection
-				// after TCP already reported the host down.
-				if ( ! empty( $use_master ) || empty( $tries_remaining ) || ( true === $tcp ) || ( null === $tcp ) ) {
+				// Connect only when TCP is responsive or disabled. A TCP-down result is
+				// authoritative for writes too; retrying a downed master only pins workers.
+				if ( ( true === $tcp ) || ( null === $tcp ) ) {
 					$this->single_db_connect( $dbhname, $host_and_port, $user, $password, $timeout );
 				} else {
 					$this->dbhs[ $dbhname ] = false;
@@ -982,10 +982,18 @@ class LudicrousDB extends wpdb {
 			);
 
 			if ( ( false === $connected ) || $this->dbhs[ $dbhname ]->connect_errno ) {
+				$connect_error = $this->dbhs[ $dbhname ]->connect_error;
+				$connect_errno = $this->dbhs[ $dbhname ]->connect_errno;
+
 				$this->last_connect_error[ $dbhname ] = array(
-					'error' => $this->dbhs[ $dbhname ]->connect_error,
-					'errno' => $this->dbhs[ $dbhname ]->connect_errno,
+					'error' => $connect_error,
+					'errno' => $connect_errno,
 				);
+
+				if ( ! empty( $host ) && ! empty( $port ) && in_array( (int) $connect_errno, array( 2002, 2003, 2005 ), true ) ) {
+					$this->tcp_cache_set( $this->tcp_get_cache_key( $host, (int) $port ), 'down' );
+				}
+
 				$this->dbhs[ $dbhname ] = false;
 
 				return false;
