@@ -158,6 +158,13 @@ class LudicrousDB extends wpdb {
 	public $db_connections = array();
 
 	/**
+	 * The last mysqli connect error for each dbhname
+	 *
+	 * @var array
+	 */
+	protected $last_connect_error = array();
+
+	/**
 	 * The list of unclosed connections sorted by LRU
 	 *
 	 * @var array
@@ -730,6 +737,7 @@ class LudicrousDB extends wpdb {
 				$this->lag_threshold = isset( $lag_threshold )
 					? $lag_threshold
 					: $this->default_lag_threshold;
+				unset( $this->last_connect_error[ $dbhname ] );
 
 				// Check for a lagged slave, if applicable
 				if ( empty( $use_master ) && empty( $write ) && empty ( $this->ignore_slave_lag ) && isset( $this->lag_threshold ) && ! isset( $server['host'] ) && ( $lagged_status = $this->get_lag_cache() ) === DB_LAG_BEHIND ) {
@@ -752,8 +760,9 @@ class LudicrousDB extends wpdb {
 					? $this->check_tcp_responsiveness( $host, $port, $timeout, $user, $password )
 					: null;
 
-				// Connect if necessary or possible
-				if ( ! empty( $use_master ) || empty( $tries_remaining ) || ( true === $tcp ) || ! isset( $this->last_connection ) ) {
+				// Connect only when TCP is responsive or disabled. A TCP-down result is
+				// authoritative for writes too; retrying a downed master only pins workers.
+				if ( ( true === $tcp ) || ( null === $tcp ) ) {
 					$this->single_db_connect( $dbhname, $host_and_port, $user, $password, $timeout );
 				} else {
 					$this->dbhs[ $dbhname ] = false;
@@ -807,6 +816,8 @@ class LudicrousDB extends wpdb {
 				$success                = false;
 				$this->last_connection  = compact( 'dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success' );
 				$this->db_connections[] = $this->last_connection;
+				$error                  = '';
+				$errno                  = 0;
 
 				if ( $this->dbh_type_check( $this->dbhs[ $dbhname ] ) ) {
 					if ( true === $this->use_mysqli ) {
@@ -816,6 +827,9 @@ class LudicrousDB extends wpdb {
 						$error = mysql_error( $this->dbhs[ $dbhname ] );
 						$errno = mysql_errno( $this->dbhs[ $dbhname ] );
 					}
+				} elseif ( isset( $this->last_connect_error[ $dbhname ] ) ) {
+					$error = $this->last_connect_error[ $dbhname ]['error'];
+					$errno = $this->last_connect_error[ $dbhname ]['errno'];
 				}
 
 				$msg  = date( 'Y-m-d H:i:s' ) . " Can't select {$dbhname} - \n"; // phpcs:ignore WordPress.DateTime.RestrictedFunctions.date_date
@@ -956,9 +970,47 @@ class LudicrousDB extends wpdb {
 				$pre_host = 'p:';
 			}
 
-			mysqli_real_connect( $this->dbhs[ $dbhname ], $pre_host . $host, $user, $password, null, $port, $socket, $client_flags );
+			// Suppress the PHP warning that mysqli_real_connect() emits on failure
+			// (e.g. "(HY000/2002): Connection timed out"). During an outage every
+			// request would otherwise raise it, flooding error handlers such as
+			// Sentry. Suppression is safe because we inspect the result and
+			// connect_errno immediately below; the error details are preserved in
+			// $this->last_connect_error so they can still be logged.
+			$connected = @mysqli_real_connect( // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				$this->dbhs[ $dbhname ],
+				$pre_host . $host,
+				$user,
+				$password,
+				null,
+				$port,
+				$socket,
+				$client_flags
+			);
 
-			if ( $this->dbhs[ $dbhname ]->connect_errno ) {
+			// mysqli_real_connect() can return false, or "succeed" while still
+			// setting connect_errno (e.g. when the server closes the connection
+			// during the handshake), so check both.
+			if ( ( false === $connected ) || $this->dbhs[ $dbhname ]->connect_errno ) {
+				$connect_error = $this->dbhs[ $dbhname ]->connect_error;
+				$connect_errno = $this->dbhs[ $dbhname ]->connect_errno;
+
+				// Because the warning above is suppressed, this is the only record
+				// of why the connection failed. connect_db() reads it back when
+				// building the "Can't select" bail message so the real cause still
+				// reaches the error log.
+				$this->last_connect_error[ $dbhname ] = array(
+					'error' => $connect_error,
+					'errno' => $connect_errno,
+				);
+
+				// Network-level errno (2002/2003/2005) means the host is down; mark
+				// the possibly stale TCP probe cache 'down' so subsequent requests
+				// fail over immediately. Skipped for socket-based connections
+				// (empty $port), which have no host:port cache key.
+				if ( ! empty( $host ) && ! empty( $port ) && in_array( (int) $connect_errno, array( 2002, 2003, 2005 ), true ) ) {
+					$this->tcp_cache_set( $this->tcp_get_cache_key( $host, (int) $port ), 'down' );
+				}
+
 				$this->dbhs[ $dbhname ] = false;
 
 				return false;
