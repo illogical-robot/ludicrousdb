@@ -970,6 +970,12 @@ class LudicrousDB extends wpdb {
 				$pre_host = 'p:';
 			}
 
+			// Suppress the PHP warning that mysqli_real_connect() emits on failure
+			// (e.g. "(HY000/2002): Connection timed out"). During an outage every
+			// request would otherwise raise it, flooding error handlers such as
+			// Sentry. Suppression is safe because we inspect the result and
+			// connect_errno immediately below; the error details are preserved in
+			// $this->last_connect_error so they can still be logged.
 			$connected = @mysqli_real_connect( // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 				$this->dbhs[ $dbhname ],
 				$pre_host . $host,
@@ -981,15 +987,26 @@ class LudicrousDB extends wpdb {
 				$client_flags
 			);
 
+			// mysqli_real_connect() can return false, or "succeed" while still
+			// setting connect_errno (e.g. when the server closes the connection
+			// during the handshake), so check both.
 			if ( ( false === $connected ) || $this->dbhs[ $dbhname ]->connect_errno ) {
 				$connect_error = $this->dbhs[ $dbhname ]->connect_error;
 				$connect_errno = $this->dbhs[ $dbhname ]->connect_errno;
 
+				// Because the warning above is suppressed, this is the only record
+				// of why the connection failed. connect_db() reads it back when
+				// building the "Can't select" bail message so the real cause still
+				// reaches the error log.
 				$this->last_connect_error[ $dbhname ] = array(
 					'error' => $connect_error,
 					'errno' => $connect_errno,
 				);
 
+				// Network-level errno (2002/2003/2005) means the host is down; mark
+				// the possibly stale TCP probe cache 'down' so subsequent requests
+				// fail over immediately. Skipped for socket-based connections
+				// (empty $port), which have no host:port cache key.
 				if ( ! empty( $host ) && ! empty( $port ) && in_array( (int) $connect_errno, array( 2002, 2003, 2005 ), true ) ) {
 					$this->tcp_cache_set( $this->tcp_get_cache_key( $host, (int) $port ), 'down' );
 				}
